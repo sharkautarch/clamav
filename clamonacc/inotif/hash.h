@@ -91,6 +91,16 @@ struct onas_hnode {
     uint32_t watched;
 };
 
+struct onas_path_entry {
+    const char *key;
+    size_t klen;
+};
+
+struct onas_path_array {
+    size_t len;
+    struct onas_path_entry* data;
+};
+
 void onas_free_ht(struct onas_ht *ht);
 int onas_ht_init(struct onas_ht **ht, uint32_t table_size);
 int onas_ht_insert(struct onas_ht *ht, struct onas_element *elem);
@@ -112,5 +122,7 @@ cl_error_t onas_rm_listnode(struct onas_lnode *head, const char *dirname);
 
 void onas_free_dirlist(struct onas_lnode *head);
 
+struct onas_path_array onas_get_all_elements(struct onas_ht *ht);
+void onas_elements_sort_by_depth(struct onas_path_array arr);
 #endif
 #endif

@@ -530,31 +530,37 @@ void *onas_ddd_th(void *arg)
 
     /* Remove provided paths recursively. */
     if ((pt = optget(ctx->clamdopts, "OnAccessExcludePath"))->enabled) {
-        while (pt) {
-            struct onas_bucket *ob = ddd_ht->head;
-            /* Iterate through the activated buckets to find matched paths */
-            while (ob != NULL) {
-                struct onas_element *oe = ob->head;
-                while (oe != NULL) {
-                    if (match_regex(oe->key, pt->strarg)) {
-                        if (onas_ht_get(ddd_ht, oe->key, oe->klen, NULL) == CL_SUCCESS) {
-                            char *oe_key = cli_safer_strdup(oe->key);
-                            if (onas_ht_rm_hierarchy(ddd_ht, oe->key, oe->klen, 0)) {
-                                logg(LOGG_ERROR, "ClamInotif: can't exclude '%s'\n", oe_key);
-                                free(oe_key);
-                                return NULL;
-                            } else {
-                                logg(LOGG_INFO, "ClamInotif: excluding '%s' (and all sub-directories)\n", oe_key);
-                                free(oe_key);
-                            }
-                        }
-                    }
-                    oe = oe->next;
-                }
-                ob = ob->next;
-            }
-            pt = (struct optstruct *)pt->nextarg;
+        //Because a single OnAccessExcludePath pattern can match multiple directory paths,
+        // attempting to iterate over the hashtable's linked list can result in
+        // missed exclusion candidates whenever onas_ht_rm_hierarchy() sets onas_element->next to NULL.
+        //We avoid this issue by copying all of the element's keys into one contiguous array,
+        // and then sorting the array from highest directory depth to lowest.
+        struct onas_path_array arr = onas_get_all_elements(ddd_ht);
+        if (NULL == arr.data) {
+            logg(LOGG_ERROR, "ClamInotif: failed to gather watched paths into contiguous array\n"); 
+            return NULL;
         }
+        onas_elements_sort_by_depth(arr);
+        size_t i;
+        for (i = 0; i < arr.len; i++) {
+            const struct optstruct *pt_iter = pt;
+            struct onas_path_entry *oe = &arr.data[i];
+            do {
+                if (!match_regex(oe->key, pt_iter->strarg))
+                    continue;
+                
+                char *oe_key = cli_safer_strdup(oe->key);
+                if (onas_ht_rm_hierarchy(ddd_ht, oe->key, oe->klen, 0)) {
+                    logg(LOGG_ERROR, "ClamInotif: can't exclude '%s'\n", oe_key);
+                    free(oe_key);
+                    return NULL;
+                }
+                logg(LOGG_INFO, "ClamInotif: excluding '%s' (and all sub-directories)\n", oe_key);
+                free(oe_key);
+                break;
+            } while ( !!(pt_iter = (struct optstruct *)pt_iter->nextarg) );
+        }
+        free(arr.data);
     }
 
     if ((pt = optget(ctx->opts, "exclude-list"))->enabled) {

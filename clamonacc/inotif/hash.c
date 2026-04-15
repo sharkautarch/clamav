@@ -827,4 +827,72 @@ int onas_ht_rm_hierarchy(struct onas_ht *ht, const char *pathname, size_t len, i
 
     return CL_SUCCESS;
 }
+
+/**
+ * @brief copies all of the elements in ht into one contiguous array 
+ */
+struct onas_path_array onas_get_all_elements(struct onas_ht *ht) {
+    uint32_t i, nbckts = ht->nbckts;
+    if (0 == nbckts)
+       return (struct onas_path_array) {0, NULL};
+    
+    size_t len = 0, cap = nbckts*2;
+    struct onas_path_entry* dst_vec = (struct onas_path_entry*)malloc(cap*sizeof(struct onas_path_entry));
+    if (NULL == dst_vec)
+       return (struct onas_path_array) {0, NULL};
+    
+    //for some reason, attempting to iterate over all buckets via bckt->next doesn't access all buckets
+    for (i = 0; i < ht->size; i++) {
+        struct onas_bucket *bckt = ht->htable[i];
+        if (NULL == bckt || bckt->size == 0)
+            continue;
+
+        struct onas_element *curr = bckt->head;
+        while (curr) {
+            if (len >= cap) {
+                cap = cap << 1;
+                void* alloc = cli_safer_realloc_or_free(dst_vec, cap*sizeof(struct onas_path_entry));
+                if (NULL == alloc)
+                   return (struct onas_path_array) {0, NULL};
+
+                dst_vec = (struct onas_path_entry*)alloc;
+            }
+            dst_vec[len].key = curr->key;
+            dst_vec[len++].klen = curr->klen;
+            
+            curr = curr->next;
+        }
+    }
+    
+    return (struct onas_path_array) {len, dst_vec};
+}
+
+static int32_t onas_get_path_depth(const struct onas_path_entry* entry) {
+  bool prevSlash = false;
+  int32_t depth = 0;
+  size_t i;
+  for (i = 0; i < entry->klen; i++) {
+      char c = entry->key[i];
+      if (prevSlash)
+          depth += '/' != c;
+      prevSlash = ('/' == c);
+  }
+  
+  return depth;
+}
+
+static int onas_depth_compare_fn(const void* lhs, const void* rhs) {
+    uint32_t depthLHS = onas_get_path_depth((const struct onas_path_entry*)lhs);
+    uint32_t depthRHS = onas_get_path_depth((const struct onas_path_entry*)rhs);
+    //this won't over/underflow, since depth can never be less than 0
+    //and, when given the depth >= 0 assumption,
+    //gcc will optimize an int64_t subtraction+clamp-within-int32-range into uint32_t subtraction
+    //https://godbolt.org/z/c1ofTjfTa
+    return depthRHS-depthLHS; 
+}
+
+void onas_elements_sort_by_depth(struct onas_path_array arr) {
+    qsort((void*)arr.data, arr.len, sizeof(struct onas_path_entry), onas_depth_compare_fn);
+}
+
 #endif
